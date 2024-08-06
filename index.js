@@ -60,6 +60,20 @@ app.delete('/api/notes/:id', (request, response) => {
 
 	response.status(204).end()
 })
+app.put("/api/notes/:id", (request, response) => {
+	const body = request.body;
+	if (!body) return response.status(400).json({error: "Content Missing"});
+
+
+	const id = request.params.id;
+	if(!id) return response.status(400).json({error: "Id missing"});
+
+	const noteIndex = notes.findIndex(note => note.id === id);
+	if (noteIndex === -1) return response.status(404).json({error: `Note with id ${id} is missing`});
+
+	notes[noteIndex] = body
+	return response.status(200).json(body)
+})
 
 app.post('/api/notes', (request, response) => {
 
@@ -80,7 +94,7 @@ app.post('/api/notes', (request, response) => {
 		id: String(generateId())
 	}
 	notes = notes.concat(note)
-	response.json(notes)
+	response.status(201).json(note)
 })
 
 app.use(unKnownEndpoint)
