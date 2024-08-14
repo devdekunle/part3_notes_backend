@@ -1,39 +1,39 @@
 import express from 'express'
 import morgan from 'morgan'
 import cors from 'cors'
+import mongoose from 'mongoose'
+import dotenv from 'dotenv'
+import  Note  from './models/notes.js'
 
+dotenv.config()
 const app = express()
-
 app.use(cors())
 app.use(express.json())
 app.use(morgan('tiny'))
 app.use(express.static('dist'))
 
-let notes = [
-	{
-    	id: "1",
-    	content: "HTML is easy",
-    	important: true
-  	},
-	  {
-	    id: "2",
-	    content: "Browser can execute only JavaScript",
-	    important: false
-	  },
-	  {
-	    id: "3",
-	    content: "GET and POST are the most important methods of HTTP protocol",
-	    important: true
-	  }
-	]
-
-const generateId = () => {
-	const maxId = notes.length > 0 ? Math.max(...notes.map(note => note.id )) : 0
-	return maxId + 1
-}
+mongoose.set('strictQuery', false);
+const uri = process.env.MONGODB_URI
+mongoose.connect(uri)
+	.then(result => {
+		console.log("Connected to MONGODB")
+	})
+	.catch(error => {
+		console.log("Error connecting to MongoDB", error.message);
+	})
 
 const unKnownEndpoint = (request, response) => {
 	return response.status(404).send({error: 'unknown endpoint'})
+}
+
+const errorHandler = (error, request, response, next) => {
+	console.log(error.message)
+	if (error.name == "CastError") {
+		response.status(400).send({error: "Malformatted Id"})
+	} else if (error.name === "ValidationError") {
+		response.status(400).send({error: error.messge})
+	}
+	next(error);
 }
 
 app.get('/', (request, response) => {
@@ -41,41 +41,56 @@ app.get('/', (request, response) => {
 })
 
 app.get('/api/notes', (request, response) => {
-	response.json(notes)
+	Note.find({})
+	.then(result => {
+		response.status(200).json(result);
+	}).catch(error => {
+		console.log("Error fetching data", error.message);
+		response.status(500).end();
+	})
 })
 
-app.get('/api/notes/:id', (request, response) => {
-	const id = request.params.id
-	const note = notes.find(note => note.id === id)
-	if (note) {
-		response.json(note)
-	} else {
-		response.status(404).end()
+app.get('/api/notes/:id', (request, response, next) => {
+	const _id = request.params.id
+	if (!_id) response.status(400).json({error: "id missing"});
+	Note.findOne({_id}).then(note => {
+		if (note) {
+			response.status(200).json(note)
+		} else {
+			response.status(404).json({error: "Note not found"})
+		}
+	})
+	.catch(error => next(error))
+})
+
+app.delete('/api/notes/:id', (request, response, next) => {
+	const _id = request.params.id
+	if (!_id) {
+		response.status(400).end()
 	}
+	Note.deleteOne(_id).then(result => {
+		response.status(204).end()
+	})
+	.catch(error => next(error))
 })
-
-app.delete('/api/notes/:id', (request, response) => {
-	const id = request.params.id
-	notes = notes.filter(note => note.id !== id)
-
-	response.status(204).end()
-})
-app.put("/api/notes/:id", (request, response) => {
+app.put("/api/notes/:id", (request, response, next) => {
 	const body = request.body;
 	if (!body) return response.status(400).json({error: "Content Missing"});
 
-
-	const id = request.params.id;
-	if(!id) return response.status(400).json({error: "Id missing"});
-
-	const noteIndex = notes.findIndex(note => note.id === id);
-	if (noteIndex === -1) return response.status(404).json({error: `Note with id ${id} is missing`});
-
-	notes[noteIndex] = body
-	return response.status(200).json(body)
+	const _id = request.params.id;
+	if(!_id) return response.status(400).json({error: "Id missing"});
+	
+	Note.findByIdAndUpdate(
+		_id,
+		{ content: body.content, important: body.important  },
+		{ new: true, runValidators: true, context: "query"})
+	.then(updatedNote => {
+		response.status(200).json(updatedNote)
+	})
+	.catch(error => next(error));
 })
 
-app.post('/api/notes', (request, response) => {
+app.post('/api/notes', async (request, response, next) => {
 
 	const body = request.body
 	if (!body.content) {
@@ -83,23 +98,29 @@ app.post('/api/notes', (request, response) => {
 			error: 'Content missing'
 		})
 	}
-	const existingContent = notes.find(note => note.content === body.content)
-	if (existingContent)
-		return response.status(400).json({
-			error: 'Content already exists'
-		})
-	const note = {
-		content: body.content,
-		important: Boolean(body.important) || false,
-		id: String(generateId())
+	try {
+		const existingNote = await Note.findOne({content: body.content}).exec()
+		if (existingNote) {
+			response.status(400).json({error: "Note already exists"})
+		} else {
+			const newNote = new Note({
+				content: body.content,
+				important: body.important
+			})
+			const returnedNote = await newNote.save()
+			response.status(201).json(returnedNote)
+		}
+	} catch(error) {
+		next(error)
 	}
-	notes = notes.concat(note)
-	response.status(201).json(note)
+
+	
 })
 
 app.use(unKnownEndpoint)
+app.use(errorHandler)
 
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
-	console.log(`My server running on port ${PORT}`)
+	console.log(`Server running on port ${PORT}`)
 })
